@@ -5,8 +5,13 @@ on:
     branches:
       - main
   schedule:
-    - cron: "0 1 * * *" # 每天凌晨1点自动运行
+    - cron: "0 1 * * *" # 每天凌晨1点运行
   workflow_dispatch:
+    inputs:
+      force_update:
+        description: '是否强制更新（忽略版本检查）'
+        required: false
+        default: 'false'
 
 permissions:
   contents: write
@@ -15,90 +20,68 @@ jobs:
   update:
     runs-on: ubuntu-latest
     steps:
-      - name: 初始化仓库
+      - name: 检出仓库
         uses: actions/checkout@v4
 
-      - name: 获取当前本地版本
-        id: get_local_version
+      - name: 设置环境
         run: |
-          if [ -f version.txt ]; then
-            LOCAL_VERSION=$(cat version.txt)
-          else
-            LOCAL_VERSION=""
-          fi
-          echo "LOCAL_VERSION=$LOCAL_VERSION" >> $GITHUB_ENV
+          echo "REPO_URL=https://api.github.com/repos/bia-pain-bache/BPB-Worker-Panel/releases" >> $GITHUB_ENV
+          echo "TARGET_FILE=worker.zip" >> $GITHUB_ENV
 
-      - name: 获取最新 Pre-release 和 Latest
-        id: get_release
+      - name: 检查并更新 Worker
+        id: update_worker
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          API_URL="https://api.github.com/repos/bia-pain-bache/BPB-Worker-Panel/releases"
-          RESPONSE=$(curl -s "$API_URL")
+          # 日志函数
+          log() { echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1"; }
 
-          # 获取最新 Pre-release
-          PRE_RELEASE=$(echo "$RESPONSE" | jq -r '.[] | select(.prerelease==true) | {tag:.tag_name, url:(.assets[]?|select(.name=="worker.zip")|.browser_download_url), date:.published_at} ' | head -n 1)
-          PRE_TAG=$(echo "$PRE_RELEASE" | jq -r '.tag')
-          PRE_URL=$(echo "$PRE_RELEASE" | jq -r '.url')
-          PRE_DATE=$(echo "$PRE_RELEASE" | jq -r '.date')
+          log "开始检查更新..."
 
-          # 获取最新正式版 Latest
-          LATEST_RELEASE=$(echo "$RESPONSE" | jq -r '.[] | select(.prerelease==false) | {tag:.tag_name, url:(.assets[]?|select(.name=="worker.zip")|.browser_download_url), date:.published_at} ' | head -n 1)
-          LATEST_TAG=$(echo "$LATEST_RELEASE" | jq -r '.tag')
-          LATEST_URL=$(echo "$LATEST_RELEASE" | jq -r '.url')
-          LATEST_DATE=$(echo "$LATEST_RELEASE" | jq -r '.date')
+          # 获取本地版本
+          LOCAL_VERSION=$(cat version.txt 2>/dev/null || echo "")
+          log "本地版本: ${LOCAL_VERSION:-无}"
 
-          echo "PRE_TAG=$PRE_TAG" >> $GITHUB_ENV
-          echo "PRE_URL=$PRE_URL" >> $GITHUB_ENV
-          echo "PRE_DATE=$PRE_DATE" >> $GITHUB_ENV
-
-          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
-          echo "LATEST_URL=$LATEST_URL" >> $GITHUB_ENV
-          echo "LATEST_DATE=$LATEST_DATE" >> $GITHUB_ENV
-
-          echo "Pre-release: $PRE_TAG ($PRE_DATE)"
-          echo "Latest: $LATEST_TAG ($LATEST_DATE)"
-
-      - name: 判断哪个版本更新
-        id: check_update
-        run: |
-          if [ "$(date -d "$PRE_DATE" +%s)" -gt "$(date -d "$LATEST_DATE" +%s)" ]; then
-            FINAL_TAG=$PRE_TAG
-            FINAL_URL=$PRE_URL
-            SOURCE="Pre-release"
-          else
-            FINAL_TAG=$LATEST_TAG
-            FINAL_URL=$LATEST_URL
-            SOURCE="Latest"
+          # 获取最新 Release
+          log "获取最新 Release 信息..."
+          RESPONSE=$(curl -s --retry 3 -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github.v3+json" "$REPO_URL")
+          if [ $? -ne 0 ] || [ -z "$RESPONSE" ]; then
+            log "ERROR: 无法访问 GitHub API"
+            exit 1
           fi
 
-          if [ -z "$LOCAL_VERSION" ]; then
-            echo "首次运行，本地无 version.txt，将更新为 $SOURCE ($FINAL_TAG)"
-            echo "UPDATE_NEEDED=true" >> $GITHUB_ENV
-          elif [ "$LOCAL_VERSION" = "$FINAL_TAG" ]; then
-            echo "UPDATE_NEEDED=false" >> $GITHUB_ENV
-            echo "当前已是最新 $SOURCE ($FINAL_TAG)"
-          else
-            echo "UPDATE_NEEDED=true" >> $GITHUB_ENV
-            echo "发现新版本 $SOURCE ($FINAL_TAG)"
+          TAG_NAME=$(echo "$RESPONSE" | jq -r '.[0].tag_name')
+          DOWNLOAD_URL=$(echo "$RESPONSE" | jq -r '.[0].assets[] | select(.name == "'"$TARGET_FILE"'") | .browser_download_url')
+
+          if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" == "null" ]; then
+            log "ERROR: 未找到 $TARGET_FILE"
+            exit 1
+          fi
+          log "最新版本: $TAG_NAME"
+
+          # 判断是否需要更新
+          FORCE_UPDATE=${{ github.event.inputs.force_update || 'false' }}
+          if [ "$LOCAL_VERSION" = "$TAG_NAME" ] && [ "$FORCE_UPDATE" != "true" ]; then
+            log "已是最新版本，无需更新"
+            echo "UPDATED=false" >> $GITHUB_ENV
+            exit 0
           fi
 
-          echo "FINAL_TAG=$FINAL_TAG" >> $GITHUB_ENV
-          echo "FINAL_URL=$FINAL_URL" >> $GITHUB_ENV
-          echo "SOURCE=$SOURCE" >> $GITHUB_ENV
+          # 下载并更新
+          log "下载 $TARGET_FILE..."
+          wget -q -O "$TARGET_FILE" "$DOWNLOAD_URL"
+          log "解压 $TARGET_FILE..."
+          unzip -o "$TARGET_FILE"
+          rm "$TARGET_FILE"
+          echo "$TAG_NAME" > version.txt
+          log "更新完成，新版本: $TAG_NAME"
 
-      - name: 更新版本
-        if: env.UPDATE_NEEDED == 'true'
-        run: |
-          shopt -s extglob
-          rm -rf !( .git )
-          wget -O worker.zip "$FINAL_URL"
-          unzip -o worker.zip
-          rm worker.zip
-          echo "$FINAL_TAG" > version.txt
+          echo "UPDATED=true" >> $GITHUB_ENV
+          echo "FINAL_TAG=$TAG_NAME" >> $GITHUB_ENV
 
-      - name: 提交更新
-        if: env.UPDATE_NEEDED == 'true'
+      - name: 提交更改
+        if: env.UPDATED == 'true'
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "🔄 自动同步最新 ${{ env.SOURCE }} Worker：${{ env.FINAL_TAG }}"
+          commit_message: "🔄 自动同步 Worker 版本: ${{ env.FINAL_TAG }}"
           commit_author: "github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
-          push_options: --force
