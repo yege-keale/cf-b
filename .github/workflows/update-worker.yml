@@ -10,8 +10,8 @@ on:
     inputs:
       update_latest:
         description: '是否手动更新 Latest 正式版？'
-        required: false
-        default: 'false'
+        required: true
+        default: 'true'
 
 permissions:
   contents: write
