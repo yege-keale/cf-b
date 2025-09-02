@@ -7,11 +7,6 @@ on:
   schedule:
     - cron: "0 1 * * *" # 每天凌晨1点自动运行
   workflow_dispatch:
-    inputs:
-      update_latest:
-        description: '是否手动更新 Latest 正式版？'
-        required: true
-        default: 'true'
 
 permissions:
   contents: write
@@ -39,64 +34,71 @@ jobs:
           API_URL="https://api.github.com/repos/bia-pain-bache/BPB-Worker-Panel/releases"
           RESPONSE=$(curl -s "$API_URL")
 
-          # 最新 Pre-release
-          PRE_RELEASE_TAG=$(echo "$RESPONSE" | jq -r '.[] | select(.prerelease==true) | .tag_name' | head -n 1)
-          PRE_RELEASE_DOWNLOAD=$(echo "$RESPONSE" | jq -r '.[] | select(.prerelease==true) | .assets[] | select(.name=="worker.zip") | .browser_download_url' | head -n 1)
+          # 获取最新 Pre-release
+          PRE_RELEASE=$(echo "$RESPONSE" | jq -r '.[] | select(.prerelease==true) | {tag:.tag_name, url:(.assets[]?|select(.name=="worker.zip")|.browser_download_url), date:.published_at} ' | head -n 1)
+          PRE_TAG=$(echo "$PRE_RELEASE" | jq -r '.tag')
+          PRE_URL=$(echo "$PRE_RELEASE" | jq -r '.url')
+          PRE_DATE=$(echo "$PRE_RELEASE" | jq -r '.date')
 
-          # 最新正式版 Latest（仅提醒）
-          LATEST_TAG=$(echo "$RESPONSE" | jq -r '.[] | select(.prerelease==false) | .tag_name' | head -n 1)
+          # 获取最新正式版 Latest
+          LATEST_RELEASE=$(echo "$RESPONSE" | jq -r '.[] | select(.prerelease==false) | {tag:.tag_name, url:(.assets[]?|select(.name=="worker.zip")|.browser_download_url), date:.published_at} ' | head -n 1)
+          LATEST_TAG=$(echo "$LATEST_RELEASE" | jq -r '.tag')
+          LATEST_URL=$(echo "$LATEST_RELEASE" | jq -r '.url')
+          LATEST_DATE=$(echo "$LATEST_RELEASE" | jq -r '.date')
 
-          echo "PRE_RELEASE_TAG=$PRE_RELEASE_TAG" >> $GITHUB_ENV
-          echo "PRE_RELEASE_DOWNLOAD=$PRE_RELEASE_DOWNLOAD" >> $GITHUB_ENV
+          echo "PRE_TAG=$PRE_TAG" >> $GITHUB_ENV
+          echo "PRE_URL=$PRE_URL" >> $GITHUB_ENV
+          echo "PRE_DATE=$PRE_DATE" >> $GITHUB_ENV
+
           echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+          echo "LATEST_URL=$LATEST_URL" >> $GITHUB_ENV
+          echo "LATEST_DATE=$LATEST_DATE" >> $GITHUB_ENV
 
-          echo "最新 Pre-release: $PRE_RELEASE_TAG"
-          echo "最新正式版 Latest: $LATEST_TAG (仅提醒)"
+          echo "Pre-release: $PRE_TAG ($PRE_DATE)"
+          echo "Latest: $LATEST_TAG ($LATEST_DATE)"
 
-      - name: 判断是否需要更新 Pre-release
+      - name: 判断哪个版本更新
         id: check_update
         run: |
-          if [ "$LOCAL_VERSION" = "$PRE_RELEASE_TAG" ]; then
-            echo "UPDATE_NEEDED=false" >> $GITHUB_ENV
-            echo "已经是最新 Pre-release 版本"
+          if [ "$(date -d "$PRE_DATE" +%s)" -gt "$(date -d "$LATEST_DATE" +%s)" ]; then
+            FINAL_TAG=$PRE_TAG
+            FINAL_URL=$PRE_URL
+            SOURCE="Pre-release"
           else
-            echo "UPDATE_NEEDED=true" >> $GITHUB_ENV
-            echo "发现新 Pre-release 版本 $PRE_RELEASE_TAG"
+            FINAL_TAG=$LATEST_TAG
+            FINAL_URL=$LATEST_URL
+            SOURCE="Latest"
           fi
 
-      - name: 更新 Pre-release
+          if [ -z "$LOCAL_VERSION" ]; then
+            echo "首次运行，本地无 version.txt，将更新为 $SOURCE ($FINAL_TAG)"
+            echo "UPDATE_NEEDED=true" >> $GITHUB_ENV
+          elif [ "$LOCAL_VERSION" = "$FINAL_TAG" ]; then
+            echo "UPDATE_NEEDED=false" >> $GITHUB_ENV
+            echo "当前已是最新 $SOURCE ($FINAL_TAG)"
+          else
+            echo "UPDATE_NEEDED=true" >> $GITHUB_ENV
+            echo "发现新版本 $SOURCE ($FINAL_TAG)"
+          fi
+
+          echo "FINAL_TAG=$FINAL_TAG" >> $GITHUB_ENV
+          echo "FINAL_URL=$FINAL_URL" >> $GITHUB_ENV
+          echo "SOURCE=$SOURCE" >> $GITHUB_ENV
+
+      - name: 更新版本
         if: env.UPDATE_NEEDED == 'true'
         run: |
           shopt -s extglob
           rm -rf !( .git )
-          wget -O worker.zip "$PRE_RELEASE_DOWNLOAD"
+          wget -O worker.zip "$FINAL_URL"
           unzip -o worker.zip
           rm worker.zip
-          echo "$PRE_RELEASE_TAG" > version.txt
+          echo "$FINAL_TAG" > version.txt
 
-      - name: 提交 Pre-release 更新
+      - name: 提交更新
         if: env.UPDATE_NEEDED == 'true'
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "🔄 自动同步最新 Pre-release Worker：${{ env.PRE_RELEASE_TAG }}"
+          commit_message: "🔄 自动同步最新 ${{ env.SOURCE }} Worker：${{ env.FINAL_TAG }}"
           commit_author: "github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
           push_options: --force
-
-      - name: 手动更新 Latest
-        if: ${{ github.event.inputs.update_latest == 'true' }}
-        run: |
-          echo "开始手动更新 Latest 正式版 $LATEST_TAG"
-          API_URL="https://api.github.com/repos/bia-pain-bache/BPB-Worker-Panel/releases"
-          RESPONSE=$(curl -s "$API_URL")
-          LATEST_DOWNLOAD=$(echo "$RESPONSE" | jq -r ".[] | select(.tag_name==\"$LATEST_TAG\") | .assets[] | select(.name==\"worker.zip\") | .browser_download_url")
-          shopt -s extglob
-          rm -rf !( .git )
-          wget -O worker.zip "$LATEST_DOWNLOAD"
-          unzip -o worker.zip
-          rm worker.zip
-          echo "$LATEST_TAG" > version.txt
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .
-          git commit -m "🔄 手动同步 Latest Worker：$LATEST_TAG"
-          git push --force
