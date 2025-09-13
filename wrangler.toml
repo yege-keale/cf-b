@@ -1,5 +1,6 @@
 name = "cf-b"  # 可以自定义为你的服务名称
 main = "_worker.js"
 compatibility_date = "2025-09-06"  # 使用当前日期，或修改为你的代码兼容的日期
-workers_dev = true  # 设置为 true 表示部署在 your-worker-name.<subdomain>.workers.dev 上
+keep_vars = true # 设置为 true 表示部署在 your-worker-name.<subdomain>.workers.dev 上
+
 
