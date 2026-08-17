@@ -26,7 +26,7 @@ jobs:
       - name: 设置环境
         run: |
           echo "REPO_URL=https://api.github.com/repos/bia-pain-bache/BPB-Worker-Panel/releases" >> $GITHUB_ENV
-          echo "TARGET_FILE=worker.zip" >> $GITHUB_ENV
+          echo "TARGET_FILE=worker.js" >> $GITHUB_ENV
 
       - name: 检查并更新 Worker
         id: update_worker
