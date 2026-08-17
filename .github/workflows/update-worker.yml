@@ -68,16 +68,20 @@ jobs:
           fi
 
           # 下载并更新
+          # BPB Release 提供的是 worker.js，但 Cloudflare 实际部署文件为 _worker.js
           log "下载 $TARGET_FILE..."
-          wget -q -O "$TARGET_FILE" "$DOWNLOAD_URL"
+          wget -q -O "_worker.js" "$DOWNLOAD_URL"
 
-          if [ ! -s "$TARGET_FILE" ]; then
-            log "ERROR: $TARGET_FILE 下载失败或文件为空"
+          if [ ! -s "_worker.js" ]; then
+            log "ERROR: _worker.js 下载失败或文件为空"
             exit 1
           fi
 
+          # 清理旧的 worker.js，避免仓库同时保留两个 Worker 文件
+          rm -f "$TARGET_FILE"
+
           echo "$TAG_NAME" > version.txt
-          log "更新完成，新版本: $TAG_NAME"
+          log "更新完成，新版本: $TAG_NAME，已覆盖 _worker.js"
 
           echo "UPDATED=true" >> $GITHUB_ENV
           echo "FINAL_TAG=$TAG_NAME" >> $GITHUB_ENV
