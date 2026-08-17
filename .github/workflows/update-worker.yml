@@ -70,9 +70,12 @@ jobs:
           # 下载并更新
           log "下载 $TARGET_FILE..."
           wget -q -O "$TARGET_FILE" "$DOWNLOAD_URL"
-          log "解压 $TARGET_FILE..."
-          unzip -o "$TARGET_FILE"
-          rm "$TARGET_FILE"
+
+          if [ ! -s "$TARGET_FILE" ]; then
+            log "ERROR: $TARGET_FILE 下载失败或文件为空"
+            exit 1
+          fi
+
           echo "$TAG_NAME" > version.txt
           log "更新完成，新版本: $TAG_NAME"
 
