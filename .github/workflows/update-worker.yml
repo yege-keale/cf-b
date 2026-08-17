@@ -59,29 +59,43 @@ jobs:
           fi
           log "最新版本: $TAG_NAME"
 
-          # 判断是否需要更新
-          FORCE_UPDATE=${{ github.event.inputs.force_update || 'false' }}
-          if [ "$LOCAL_VERSION" = "$TAG_NAME" ] && [ "$FORCE_UPDATE" != "true" ]; then
-            log "已是最新版本，无需更新"
+          # 下载到临时文件后比较实际内容
+          # 即使 version.txt 已经是最新版本，也能发现 _worker.js 与官方 worker.js 不一致
+          log "下载 $TARGET_FILE..."
+          wget -q -O "/tmp/worker.js" "$DOWNLOAD_URL"
+
+          if [ ! -s "/tmp/worker.js" ]; then
+            log "ERROR: worker.js 下载失败或文件为空"
+            exit 1
+          fi
+
+          LOCAL_SHA256=$(sha256sum "_worker.js" 2>/dev/null | awk '{print $1}')
+          REMOTE_SHA256=$(sha256sum "/tmp/worker.js" | awk '{print $1}')
+
+          log "本地 _worker.js SHA256: ${LOCAL_SHA256:-无}"
+          log "官方 worker.js SHA256: $REMOTE_SHA256"
+
+          # 版本相同且文件内容也相同，才真正跳过更新
+          if [ "$LOCAL_VERSION" = "$TAG_NAME" ] && [ "$LOCAL_SHA256" = "$REMOTE_SHA256" ] && [ "$FORCE_UPDATE" != "true" ]; then
+            log "版本和文件内容均为最新，无需更新"
             echo "UPDATED=false" >> $GITHUB_ENV
             exit 0
           fi
 
-          # 下载并更新
-          # BPB Release 提供的是 worker.js，但 Cloudflare 实际部署文件为 _worker.js
-          log "下载 $TARGET_FILE..."
-          wget -q -O "_worker.js" "$DOWNLOAD_URL"
+          # 官方 worker.js → Cloudflare Pages 实际部署文件 _worker.js
+          cp "/tmp/worker.js" "_worker.js"
 
           if [ ! -s "_worker.js" ]; then
-            log "ERROR: _worker.js 下载失败或文件为空"
+            log "ERROR: _worker.js 更新失败"
             exit 1
           fi
 
           # 清理旧的 worker.js，避免仓库同时保留两个 Worker 文件
           rm -f "$TARGET_FILE"
+          rm -f "/tmp/worker.js"
 
           echo "$TAG_NAME" > version.txt
-          log "更新完成，新版本: $TAG_NAME，已覆盖 _worker.js"
+          log "更新完成：$TAG_NAME，已覆盖 _worker.js"
 
           echo "UPDATED=true" >> $GITHUB_ENV
           echo "FINAL_TAG=$TAG_NAME" >> $GITHUB_ENV
